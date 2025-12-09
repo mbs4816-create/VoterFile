@@ -25,10 +25,13 @@ export interface Organization {
   };
 }
 
-export interface AuthState {
-  user: User | null;
-  organization: Organization | null;
+export interface UserWithOrgs extends User {
   organizations: Organization[];
+}
+
+export interface AuthResponse {
+  success: boolean;
+  data: UserWithOrgs | null;
 }
 
 export function useAuth() {
@@ -36,7 +39,7 @@ export function useAuth() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['auth', 'me'],
-    queryFn: () => apiGet<{ success: boolean; data: AuthState }>('/auth/me'),
+    queryFn: () => apiGet<AuthResponse>('/auth/me'),
     retry: false,
     staleTime: 30 * 60 * 1000, // 30 minutes
   });
@@ -57,11 +60,22 @@ export function useAuth() {
     },
   });
 
+  const userData = data?.data;
+  const organizations = userData?.organizations || [];
+  // Use first organization as current organization
+  const currentOrg = organizations[0] || null;
+
   return {
-    user: data?.data?.user || null,
-    organization: data?.data?.organization || null,
-    organizations: data?.data?.organizations || [],
-    isAuthenticated: !!data?.data?.user,
+    user: userData ? {
+      id: userData.id,
+      email: userData.email,
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      createdAt: '',
+    } : null,
+    organization: currentOrg,
+    organizations,
+    isAuthenticated: !!userData,
     isLoading,
     error,
     logout: logoutMutation.mutate,

@@ -13,9 +13,9 @@ declare global {
   }
 }
 
-// Session user type (from OIDC)
+// Session user type (supports both email/password and OIDC auth)
 interface SessionUser {
-  id: string;
+  id: number | string; // number for email/password auth, string for OIDC
   email: string;
   firstName?: string;
   lastName?: string;
@@ -27,28 +27,43 @@ interface SessionUser {
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    // Check for session user (from OIDC auth)
+    // Check for session user
     const sessionUser = (req.session as any)?.user as SessionUser | undefined;
     
     if (!sessionUser) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
-    // Get or create user in our database
-    let user = await db.query.users.findFirst({
-      where: eq(schema.users.externalId, sessionUser.id),
-    });
+    // Look up user - support both email/password auth (numeric id) and OIDC (string externalId)
+    let user: typeof schema.users.$inferSelect | undefined;
+    
+    if (typeof sessionUser.id === 'number') {
+      // Email/password auth - id is the database ID
+      user = await db.query.users.findFirst({
+        where: eq(schema.users.id, sessionUser.id),
+      });
+    } else {
+      // OIDC auth - id is the external provider ID
+      user = await db.query.users.findFirst({
+        where: eq(schema.users.externalId, sessionUser.id),
+      });
+      
+      if (!user) {
+        // Create user on first OIDC login
+        const [newUser] = await db.insert(schema.users).values({
+          externalId: sessionUser.id,
+          email: sessionUser.email,
+          firstName: sessionUser.firstName || null,
+          lastName: sessionUser.lastName || null,
+          profileImageUrl: sessionUser.profileImageUrl || null,
+        }).returning();
+        user = newUser;
+      }
+    }
 
     if (!user) {
-      // Create user on first login
-      const [newUser] = await db.insert(schema.users).values({
-        externalId: sessionUser.id,
-        email: sessionUser.email,
-        firstName: sessionUser.firstName || null,
-        lastName: sessionUser.lastName || null,
-        profileImageUrl: sessionUser.profileImageUrl || null,
-      }).returning();
-      user = newUser;
+      // Session references a user that no longer exists
+      return res.status(401).json({ success: false, error: 'User not found. Please log in again.' });
     }
 
     req.user = user;

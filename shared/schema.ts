@@ -17,11 +17,13 @@ import { relations } from 'drizzle-orm';
 
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
-  externalId: varchar('external_id', { length: 255 }).unique(), // OIDC subject ID
+  externalId: varchar('external_id', { length: 255 }).unique(), // OIDC subject ID (optional for password auth)
   email: varchar('email', { length: 255 }).notNull().unique(),
+  passwordHash: varchar('password_hash', { length: 255 }), // For email/password auth
   firstName: varchar('first_name', { length: 100 }),
   lastName: varchar('last_name', { length: 100 }),
   profileImageUrl: text('profile_image_url'),
+  emailVerified: boolean('email_verified').default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
