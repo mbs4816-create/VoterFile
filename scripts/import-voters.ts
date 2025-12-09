@@ -89,36 +89,36 @@ interface VoterRecord {
   firstName?: string;
   middleName?: string;
   lastName?: string;
-  suffix?: string;
-  dateOfBirth?: Date;
-  yearOfBirth?: number;
-  gender?: string;
-  address?: string;
+  nameSuffix?: string;
+  houseNumber?: string;
+  streetName?: string;
+  unitType?: string;
+  unitNumber?: string;
   city?: string;
   state?: string;
   zipCode?: string;
-  county?: string;
-  precinctId?: string;
+  countyCode?: string;
+  countyName?: string;
+  precinctCode?: string;
   precinctName?: string;
   congressionalDistrict?: string;
   stateSenateDistrict?: string;
-  stateHouseDistrict?: string;
-  partyAffiliation?: string;
-  registrationDate?: Date;
-  registrationStatus?: string;
-  latitude?: number;
-  longitude?: number;
+  legislativeDistrict?: string;
+  schoolDistrict?: string;
+  judicialDistrict?: string;
+  party?: string;
+  dobYear?: number;
+  registrationDate?: string; // YYYY-MM-DD format
   phone?: string;
   email?: string;
-  customFields?: Record<string, any>;
 }
 
 interface ElectionRecord {
   voterId: number;
-  electionDate: Date;
-  electionType: string;
+  organizationId: number;
+  electionDate: string; // YYYY-MM-DD format
+  electionType?: string;
   votingMethod?: string;
-  party?: string;
 }
 
 interface ImportStats {
@@ -154,24 +154,22 @@ async function getOrCreateOrganization(): Promise<number> {
   return result[0].id;
 }
 
-function parseDate(value: string | undefined): Date | undefined {
+function parseDate(value: string | undefined): string | undefined {
   if (!value || value.trim() === '') return undefined;
   
-  // Try various date formats
-  const formats = [
-    /^(\d{4})-(\d{2})-(\d{2})$/,  // YYYY-MM-DD
-    /^(\d{2})\/(\d{2})\/(\d{4})$/, // MM/DD/YYYY
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/, // M/D/YYYY
-  ];
+  // Already in YYYY-MM-DD format
+  const isoMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return value;
+  }
 
-  for (const format of formats) {
-    const match = value.match(format);
-    if (match) {
-      const date = new Date(value);
-      if (!isNaN(date.getTime())) {
-        return date;
-      }
-    }
+  // MM/DD/YYYY or M/D/YYYY format
+  const usMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (usMatch) {
+    const month = usMatch[1].padStart(2, '0');
+    const day = usMatch[2].padStart(2, '0');
+    const year = usMatch[3];
+    return `${year}-${month}-${day}`;
   }
 
   return undefined;
@@ -181,16 +179,6 @@ function parseNumber(value: string | undefined): number | undefined {
   if (!value || value.trim() === '') return undefined;
   const num = parseFloat(value);
   return isNaN(num) ? undefined : num;
-}
-
-function buildAddress(row: Record<string, string>): string {
-  const parts = [
-    row['HouseNumber'],
-    row['StreetName'],
-    row['UnitType'] && row['UnitNumber'] ? `${row['UnitType']} ${row['UnitNumber']}` : row['UnitNumber'],
-  ].filter(Boolean);
-  
-  return parts.join(' ').trim() || row['Address'] || '';
 }
 
 async function importDistrict(
@@ -304,38 +292,33 @@ async function importDistrict(
         row[header] = values[i]?.replace(/^"|"$/g, '').trim() || '';
       });
 
-      // Build voter record
+      // Build voter record to match schema
       const voter: VoterRecord = {
         stateVoterId: row['VoterId'] || row['StateVoterId'] || '',
         organizationId: orgId,
         firstName: row['FirstName'],
         middleName: row['MiddleName'],
         lastName: row['LastName'],
-        suffix: row['NameSuffix'] || row['Suffix'],
-        dateOfBirth: parseDate(row['DOB'] || row['DateOfBirth']),
-        yearOfBirth: parseNumber(row['DOBYear']) as number | undefined,
-        address: buildAddress(row),
+        nameSuffix: row['NameSuffix'] || row['Suffix'],
+        houseNumber: row['HouseNumber'],
+        streetName: row['StreetName'],
+        unitType: row['UnitType'],
+        unitNumber: row['UnitNumber'],
         city: row['City'],
         state: row['State'] || 'MN',
         zipCode: row['ZipCode'] || row['Zip'],
-        county: row['CountyCode'] || row['County'],
-        precinctId: row['PrecinctCode'],
+        countyCode: row['CountyCode'],
+        countyName: row['County'] || row['CountyName'],
+        precinctCode: row['PrecinctCode'],
         precinctName: row['PrecinctName'],
         congressionalDistrict: String(districtNum),
         stateSenateDistrict: row['MNLegDistrict'],
-        stateHouseDistrict: row['MNLegSubDistrict'],
-        partyAffiliation: row['Party'],
+        legislativeDistrict: row['MNLegSubDistrict'],
+        schoolDistrict: row['SchoolDistrict'],
+        judicialDistrict: row['JudicialDistrict'],
+        party: row['Party'],
+        dobYear: parseNumber(row['DOBYear']) as number | undefined,
         registrationDate: parseDate(row['RegistrationDate']),
-        registrationStatus: row['VoterStatus'] || 'Active',
-        latitude: parseNumber(row['Latitude']),
-        longitude: parseNumber(row['Longitude']),
-        customFields: {
-          municipalityCode: row['MunicipalityCode'],
-          municipality: row['MunicipalityName'],
-          ward: row['Ward'],
-          schoolDistrict: row['SchoolDistrict'],
-          judicialDistrict: row['JudicialDistrict'],
-        },
       };
 
       if (!voter.stateVoterId) {
@@ -358,6 +341,7 @@ async function importDistrict(
           const electionDate = parseDate(row[dateKey]);
           if (electionDate) {
             elections.push({
+              organizationId: orgId,
               electionDate,
               electionType: row[typeKey] || 'General',
               votingMethod: row[methodKey],
@@ -371,6 +355,7 @@ async function importDistrict(
         const electionDate = parseDate(row['ElectionDate']);
         if (electionDate) {
           elections.push({
+            organizationId: orgId,
             electionDate,
             electionType: row['ElectionType'] || 'General',
             votingMethod: row['VotingMethod'],

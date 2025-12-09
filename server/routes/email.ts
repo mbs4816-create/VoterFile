@@ -19,10 +19,13 @@ router.get('/templates', requireAuth, requireOrganization, async (req, res) => {
 
     res.json({
       success: true,
-      data: templates.map(t => ({
-        ...t,
-        creatorName: t.creator ? `${t.creator.firstName} ${t.creator.lastName}` : 'Unknown',
-      })),
+      data: templates.map(t => {
+        const creator = t.creator as { firstName?: string; lastName?: string } | null;
+        return {
+          ...t,
+          creatorName: creator ? `${creator.firstName || ''} ${creator.lastName || ''}`.trim() || 'Unknown' : 'Unknown',
+        };
+      }),
     });
   } catch (error) {
     console.error('Get templates error:', error);
@@ -142,10 +145,13 @@ router.get('/campaigns', requireAuth, requireOrganization, async (req, res) => {
 
     res.json({
       success: true,
-      data: campaigns.map(c => ({
-        ...c,
-        creatorName: c.creator ? `${c.creator.firstName} ${c.creator.lastName}` : 'Unknown',
-      })),
+      data: campaigns.map(c => {
+        const creator = c.creator as { firstName?: string; lastName?: string } | null;
+        return {
+          ...c,
+          creatorName: creator ? `${creator.firstName || ''} ${creator.lastName || ''}`.trim() || 'Unknown' : 'Unknown',
+        };
+      }),
     });
   } catch (error) {
     console.error('Get campaigns error:', error);

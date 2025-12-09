@@ -31,6 +31,7 @@ export const users = pgTable('users', {
 export const organizations = pgTable('organizations', {
   id: serial('id').primaryKey(),
   name: varchar('name', { length: 255 }).notNull(),
+  slug: varchar('slug', { length: 100 }).unique(),
   description: text('description'),
   settings: json('settings').$type<OrganizationSettings>().default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),

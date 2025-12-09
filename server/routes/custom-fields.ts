@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db, schema } from '../db';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { requireAuth, requireOrganization, requireRole } from '../middleware/auth';
 
 const router = Router();
@@ -10,7 +10,7 @@ router.get('/definitions', requireAuth, requireOrganization, async (req, res) =>
   try {
     const definitions = await db.query.customFieldDefinitions.findMany({
       where: eq(schema.customFieldDefinitions.organizationId, req.organizationId!),
-      orderBy: (defs, { asc }) => [asc(defs.displayOrder), asc(defs.createdAt)],
+      orderBy: (defs, { asc }) => [asc(defs.sortOrder), asc(defs.createdAt)],
     });
 
     res.json({ success: true, data: definitions });
@@ -23,39 +23,38 @@ router.get('/definitions', requireAuth, requireOrganization, async (req, res) =>
 // Create custom field definition
 router.post('/definitions', requireAuth, requireOrganization, requireRole('admin'), async (req, res) => {
   try {
-    const { name, fieldKey, fieldType, options, isRequired, isSearchable, displayOrder } = req.body;
+    const { fieldName, fieldLabel, fieldType, options, isRequired, sortOrder } = req.body;
 
-    if (!name || !fieldKey || !fieldType) {
-      return res.status(400).json({ success: false, error: 'name, fieldKey, and fieldType are required' });
+    if (!fieldName || !fieldLabel || !fieldType) {
+      return res.status(400).json({ success: false, error: 'fieldName, fieldLabel, and fieldType are required' });
     }
 
     // Validate fieldType
-    const validTypes = ['text', 'number', 'date', 'boolean', 'select', 'multiselect'];
+    const validTypes = ['text', 'number', 'date', 'boolean', 'select'];
     if (!validTypes.includes(fieldType)) {
       return res.status(400).json({ success: false, error: `fieldType must be one of: ${validTypes.join(', ')}` });
     }
 
-    // Check for duplicate fieldKey
+    // Check for duplicate fieldName
     const existing = await db.query.customFieldDefinitions.findFirst({
       where: and(
         eq(schema.customFieldDefinitions.organizationId, req.organizationId!),
-        eq(schema.customFieldDefinitions.fieldKey, fieldKey)
+        eq(schema.customFieldDefinitions.fieldName, fieldName)
       ),
     });
 
     if (existing) {
-      return res.status(400).json({ success: false, error: 'A field with this key already exists' });
+      return res.status(400).json({ success: false, error: 'A field with this name already exists' });
     }
 
     const [definition] = await db.insert(schema.customFieldDefinitions).values({
       organizationId: req.organizationId!,
-      name,
-      fieldKey,
+      fieldName,
+      fieldLabel,
       fieldType,
       options: options || null,
       isRequired: isRequired || false,
-      isSearchable: isSearchable || false,
-      displayOrder: displayOrder || 0,
+      sortOrder: sortOrder || 0,
     }).returning();
 
     res.json({ success: true, data: definition });
@@ -69,23 +68,22 @@ router.post('/definitions', requireAuth, requireOrganization, requireRole('admin
 router.patch('/definitions/:id', requireAuth, requireOrganization, requireRole('admin'), async (req, res) => {
   try {
     const definitionId = parseInt(req.params.id, 10);
-    const { name, options, isRequired, isSearchable, displayOrder } = req.body;
+    const { fieldLabel, options, isRequired, sortOrder } = req.body;
 
-    // Cannot update fieldKey or fieldType once created
     const [updated] = await db
       .update(schema.customFieldDefinitions)
       .set({
-        ...(name && { name }),
+        ...(fieldLabel && { fieldLabel }),
         ...(options !== undefined && { options }),
         ...(isRequired !== undefined && { isRequired }),
-        ...(isSearchable !== undefined && { isSearchable }),
-        ...(displayOrder !== undefined && { displayOrder }),
-        updatedAt: new Date(),
+        ...(sortOrder !== undefined && { sortOrder }),
       })
-      .where(and(
-        eq(schema.customFieldDefinitions.id, definitionId),
-        eq(schema.customFieldDefinitions.organizationId, req.organizationId!)
-      ))
+      .where(
+        and(
+          eq(schema.customFieldDefinitions.id, definitionId),
+          eq(schema.customFieldDefinitions.organizationId, req.organizationId!)
+        )
+      )
       .returning();
 
     if (!updated) {
@@ -104,16 +102,21 @@ router.delete('/definitions/:id', requireAuth, requireOrganization, requireRole(
   try {
     const definitionId = parseInt(req.params.id, 10);
 
-    // Also delete all values for this field
-    await db.delete(schema.customFieldValues)
-      .where(eq(schema.customFieldValues.fieldId, definitionId));
+    const [deleted] = await db
+      .delete(schema.customFieldDefinitions)
+      .where(
+        and(
+          eq(schema.customFieldDefinitions.id, definitionId),
+          eq(schema.customFieldDefinitions.organizationId, req.organizationId!)
+        )
+      )
+      .returning();
 
-    await db.delete(schema.customFieldDefinitions).where(and(
-      eq(schema.customFieldDefinitions.id, definitionId),
-      eq(schema.customFieldDefinitions.organizationId, req.organizationId!)
-    ));
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Custom field definition not found' });
+    }
 
-    res.json({ success: true, message: 'Custom field definition deleted' });
+    res.json({ success: true });
   } catch (error) {
     console.error('Delete custom field definition error:', error);
     res.status(500).json({ success: false, error: 'Failed to delete custom field definition' });
@@ -121,47 +124,35 @@ router.delete('/definitions/:id', requireAuth, requireOrganization, requireRole(
 });
 
 // Get custom field values for a voter
-router.get('/values/:voterId', requireAuth, requireOrganization, async (req, res) => {
+router.get('/voters/:voterId', requireAuth, requireOrganization, async (req, res) => {
   try {
     const voterId = parseInt(req.params.voterId, 10);
 
-    // Verify voter belongs to org
-    const voter = await db.query.voters.findFirst({
-      where: and(
-        eq(schema.voters.id, voterId),
-        eq(schema.voters.organizationId, req.organizationId!)
-      ),
-    });
-
-    if (!voter) {
-      return res.status(404).json({ success: false, error: 'Voter not found' });
-    }
-
-    const values = await db.query.customFieldValues.findMany({
-      where: eq(schema.customFieldValues.voterId, voterId),
-      with: {
-        field: true,
-      },
-    });
-
-    // Get all definitions to show empty fields too
+    // Get all definitions for this organization
     const definitions = await db.query.customFieldDefinitions.findMany({
       where: eq(schema.customFieldDefinitions.organizationId, req.organizationId!),
+      orderBy: (defs, { asc }) => [asc(defs.sortOrder)],
     });
 
-    // Map values to definitions
-    const valueMap = new Map(values.map(v => [v.fieldId, v.value]));
-    const data = definitions.map(def => ({
-      fieldId: def.id,
-      fieldKey: def.fieldKey,
-      name: def.name,
+    // Get all values for this voter
+    const values = await db.query.customFieldValues.findMany({
+      where: eq(schema.customFieldValues.voterId, voterId),
+    });
+
+    // Build a map of fieldDefinitionId -> value
+    const valueMap = new Map(values.map(v => [v.fieldDefinitionId, v.value]));
+
+    // Return definitions with their values
+    const result = definitions.map(def => ({
+      fieldName: def.fieldName,
+      fieldLabel: def.fieldLabel,
       fieldType: def.fieldType,
       options: def.options,
       isRequired: def.isRequired,
       value: valueMap.get(def.id) || null,
     }));
 
-    res.json({ success: true, data });
+    res.json({ success: true, data: result });
   } catch (error) {
     console.error('Get custom field values error:', error);
     res.status(500).json({ success: false, error: 'Failed to get custom field values' });
@@ -169,120 +160,107 @@ router.get('/values/:voterId', requireAuth, requireOrganization, async (req, res
 });
 
 // Set custom field value for a voter
-router.post('/values/:voterId', requireAuth, requireOrganization, async (req, res) => {
+router.post('/voters/:voterId', requireAuth, requireOrganization, async (req, res) => {
   try {
     const voterId = parseInt(req.params.voterId, 10);
-    const { fieldId, value } = req.body;
+    const { fieldName, value } = req.body;
 
-    if (!fieldId) {
-      return res.status(400).json({ success: false, error: 'fieldId is required' });
+    if (!fieldName) {
+      return res.status(400).json({ success: false, error: 'fieldName is required' });
     }
 
-    // Verify voter belongs to org
-    const voter = await db.query.voters.findFirst({
+    // Find the field definition
+    const definition = await db.query.customFieldDefinitions.findFirst({
       where: and(
-        eq(schema.voters.id, voterId),
-        eq(schema.voters.organizationId, req.organizationId!)
+        eq(schema.customFieldDefinitions.organizationId, req.organizationId!),
+        eq(schema.customFieldDefinitions.fieldName, fieldName)
       ),
     });
 
-    if (!voter) {
-      return res.status(404).json({ success: false, error: 'Voter not found' });
-    }
-
-    // Verify field belongs to org
-    const field = await db.query.customFieldDefinitions.findFirst({
-      where: and(
-        eq(schema.customFieldDefinitions.id, fieldId),
-        eq(schema.customFieldDefinitions.organizationId, req.organizationId!)
-      ),
-    });
-
-    if (!field) {
+    if (!definition) {
       return res.status(404).json({ success: false, error: 'Custom field definition not found' });
     }
 
-    // Upsert value
+    // Check if value already exists
     const existing = await db.query.customFieldValues.findFirst({
       where: and(
-        eq(schema.customFieldValues.voterId, voterId),
-        eq(schema.customFieldValues.fieldId, fieldId)
+        eq(schema.customFieldValues.fieldDefinitionId, definition.id),
+        eq(schema.customFieldValues.voterId, voterId)
       ),
     });
 
-    let result;
     if (existing) {
-      [result] = await db
+      // Update existing value
+      const [updated] = await db
         .update(schema.customFieldValues)
         .set({ value, updatedAt: new Date() })
         .where(eq(schema.customFieldValues.id, existing.id))
         .returning();
+
+      res.json({ success: true, data: updated });
     } else {
-      [result] = await db.insert(schema.customFieldValues).values({
+      // Create new value
+      const [created] = await db.insert(schema.customFieldValues).values({
+        fieldDefinitionId: definition.id,
         voterId,
-        fieldId,
         value,
       }).returning();
-    }
 
-    res.json({ success: true, data: result });
+      res.json({ success: true, data: created });
+    }
   } catch (error) {
     console.error('Set custom field value error:', error);
     res.status(500).json({ success: false, error: 'Failed to set custom field value' });
   }
 });
 
-// Bulk set custom field values for multiple voters
-router.post('/values/bulk', requireAuth, requireOrganization, async (req, res) => {
+// Set multiple custom field values for a voter
+router.put('/voters/:voterId', requireAuth, requireOrganization, async (req, res) => {
   try {
-    const { voterIds, fieldId, value } = req.body;
+    const voterId = parseInt(req.params.voterId, 10);
+    const { fields } = req.body; // Array of { fieldName, value }
 
-    if (!voterIds || !Array.isArray(voterIds) || voterIds.length === 0) {
-      return res.status(400).json({ success: false, error: 'voterIds array is required' });
+    if (!Array.isArray(fields)) {
+      return res.status(400).json({ success: false, error: 'fields must be an array' });
     }
 
-    if (!fieldId) {
-      return res.status(400).json({ success: false, error: 'fieldId is required' });
-    }
-
-    // Verify field belongs to org
-    const field = await db.query.customFieldDefinitions.findFirst({
-      where: and(
-        eq(schema.customFieldDefinitions.id, fieldId),
-        eq(schema.customFieldDefinitions.organizationId, req.organizationId!)
-      ),
+    // Get all field definitions for this organization
+    const definitions = await db.query.customFieldDefinitions.findMany({
+      where: eq(schema.customFieldDefinitions.organizationId, req.organizationId!),
     });
 
-    if (!field) {
-      return res.status(404).json({ success: false, error: 'Custom field definition not found' });
-    }
+    const defMap = new Map(definitions.map(d => [d.fieldName, d]));
 
-    // Process in batches
-    const BATCH_SIZE = 100;
-    let processed = 0;
+    for (const field of fields) {
+      const def = defMap.get(field.fieldName);
+      if (!def) continue;
 
-    for (let i = 0; i < voterIds.length; i += BATCH_SIZE) {
-      const batch = voterIds.slice(i, i + BATCH_SIZE);
-      
-      // Upsert using ON CONFLICT
-      await db.insert(schema.customFieldValues)
-        .values(batch.map((voterId: number) => ({
+      // Check if value already exists
+      const existing = await db.query.customFieldValues.findFirst({
+        where: and(
+          eq(schema.customFieldValues.fieldDefinitionId, def.id),
+          eq(schema.customFieldValues.voterId, voterId)
+        ),
+      });
+
+      if (existing) {
+        await db
+          .update(schema.customFieldValues)
+          .set({ value: field.value, updatedAt: new Date() })
+          .where(eq(schema.customFieldValues.id, existing.id));
+      } else {
+        await db.insert(schema.customFieldValues).values({
+          fieldDefinitionId: def.id,
           voterId,
-          fieldId,
-          value,
-        })))
-        .onConflictDoUpdate({
-          target: [schema.customFieldValues.voterId, schema.customFieldValues.fieldId],
-          set: { value, updatedAt: new Date() },
+          value: field.value,
         });
-
-      processed += batch.length;
+      }
     }
 
-    res.json({ success: true, message: `Updated ${processed} voters` });
+    res.json({ success: true });
   } catch (error) {
-    console.error('Bulk set custom field values error:', error);
-    res.status(500).json({ success: false, error: 'Failed to bulk set custom field values' });
+    console.error('Set custom field values error:', error);
+    res.status(500).json({ success: false, error: 'Failed to set custom field values' });
   }
 });
 

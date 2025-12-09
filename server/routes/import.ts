@@ -407,18 +407,16 @@ async function insertVoterBatch(batch: any[], organizationId: number) {
     organizationId,
   }));
 
-  // Use ON CONFLICT for upsert based on stateVoterId
-  await db.insert(schema.voters)
-    .values(votersToInsert)
-    .onConflictDoUpdate({
-      target: [schema.voters.organizationId, schema.voters.stateVoterId],
-      set: {
-        firstName: schema.voters.firstName,
-        lastName: schema.voters.lastName,
-        // ... other fields would be updated
-        updatedAt: new Date(),
-      },
-    });
+  // Insert voters (use simple insert, duplicates handled by constraint)
+  for (const voter of votersToInsert) {
+    try {
+      await db.insert(schema.voters)
+        .values(voter)
+        .onConflictDoNothing();
+    } catch {
+      // Skip on error, continue with next voter
+    }
+  }
 }
 
 async function insertElectionBatch(batch: any[], organizationId: number) {

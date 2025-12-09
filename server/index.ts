@@ -20,12 +20,7 @@ import customFieldsRoutes from './routes/custom-fields';
 const app = express();
 
 // Trust proxy for secure cookies behind reverse proxy
-app.use((req, res, next) => {
-  if (req.headers['x-forwarded-proto'] === 'https') {
-    req.secure = true;
-  }
-  next();
-});
+app.set('trust proxy', 1);
 
 // CORS configuration
 app.use(cors({
